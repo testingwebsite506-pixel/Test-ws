@@ -3,9 +3,19 @@ let centrifuge;
 let currentUser = null;
 let currentRoom = null;
 const API_URL = window.location.origin;
-const CENTRIFUGO_URL = window.location.protocol === 'https:' 
-  ? 'wss://' + window.location.host + '/connection/websocket'
-  : 'ws://localhost:8000/connection/websocket';
+
+// Determine Centrifugo URL based on environment
+const getCentrifugoURL = () => {
+  if (window.location.protocol === 'https:') {
+    // Production: wss (secure websocket)
+    return 'wss://' + window.location.host + '/connection/websocket';
+  } else {
+    // Development: ws (regular websocket)
+    return 'ws://localhost:8000/connection/websocket';
+  }
+};
+
+const CENTRIFUGO_URL = getCentrifugoURL();
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -50,6 +60,12 @@ async function joinChat() {
         return;
     }
 
+    // Validate email
+    if (!isValidEmail(email)) {
+        alert('Please enter a valid email');
+        return;
+    }
+
     try {
         // Create user via API
         const response = await fetch(`${API_URL}/api/users`, {
@@ -82,39 +98,14 @@ async function joinChat() {
         // Initialize Centrifugo
         centrifuge = new Centrifuge(CENTRIFUGO_URL, {
             token: token,
-            debug: true
+            debug: false,
+            maxReconnectDelay: 30000
         });
 
         setupCentrifugoListeners();
 
         // Connect
         centrifuge.connect();
-
-        centrifuge.on('connect', () => {
-            console.log('Connected to Centrifugo');
-            
-            // Notify user online
-            centrifuge.call('user_online', {
-                user_id: currentUser.id,
-                username: currentUser.username
-            }).then(result => {
-                console.log('User online response:', result);
-                updateOnlineUsers(result.online_users);
-            }).catch(error => {
-                console.error('Error marking user online:', error);
-            });
-        });
-
-        // Switch UI
-        document.getElementById('loginSection').classList.remove('active');
-        document.getElementById('chatSection').classList.add('active');
-        document.getElementById('userInfo').innerHTML = `
-            <div class="status"></div>
-            <strong>${currentUser.username}</strong>
-        `;
-
-        // Load rooms
-        await loadRooms();
 
     } catch (error) {
         console.error('Error joining chat:', error);
@@ -123,29 +114,64 @@ async function joinChat() {
 }
 
 function setupCentrifugoListeners() {
-    // Subscribe to user status channel
-    const userStatusSub = centrifuge.newSubscription('user_status');
-    
-    userStatusSub.on('subscribe', () => {
-        console.log('Subscribed to user_status channel');
+    centrifuge.on('connect', () => {
+        console.log('✅ Connected to Centrifugo');
+        
+        // Notify user online
+        centrifuge.call('user_online', {
+            user_id: currentUser.id,
+            username: currentUser.username
+        }).then(result => {
+            console.log('User online response:', result);
+            updateOnlineUsers(result.online_users);
+            
+            // Switch UI
+            document.getElementById('loginSection').classList.remove('active');
+            document.getElementById('chatSection').classList.add('active');
+            document.getElementById('userInfo').innerHTML = `
+                <div class="status"></div>
+                <strong>${currentUser.username}</strong>
+            `;
+
+            // Load rooms
+            loadRooms();
+        }).catch(error => {
+            console.error('Error marking user online:', error);
+            alert('Failed to mark user online');
+        });
+
+        // Subscribe to user status channel
+        const userStatusSub = centrifuge.newSubscription('user_status');
+        
+        userStatusSub.on('subscribe', () => {
+            console.log('Subscribed to user_status channel');
+        });
+
+        userStatusSub.on('publication', (message) => {
+            const { type, data } = message.data;
+            if (type === 'user_status_changed') {
+                handleUserStatusChange(data);
+            }
+        });
+
+        userStatusSub.on('error', (err) => {
+            console.error('User status subscription error:', err);
+        });
+
+        userStatusSub.subscribe();
     });
 
-    userStatusSub.on('publication', (message) => {
-        const { type, data } = message.data;
-        if (type === 'user_status_changed') {
-            handleUserStatusChange(data);
-        }
-    });
-
-    userStatusSub.subscribe();
-
-    // Handle disconnection
-    centrifuge.on('disconnect', () => {
-        console.log('Disconnected from Centrifugo');
+    centrifuge.on('disconnect', (ctx) => {
+        console.log('⚠️ Disconnected from Centrifugo:', ctx.reason);
+        alert('Connection lost. Please refresh the page.');
     });
 
     centrifuge.on('error', (error) => {
-        console.error('Centrifugo error:', error);
+        console.error('❌ Centrifugo error:', error);
+    });
+
+    centrifuge.on('connect_error', (error) => {
+        console.error('Connection error:', error);
     });
 }
 
@@ -153,10 +179,13 @@ function setupCentrifugoListeners() {
 async function loadRooms() {
     try {
         const response = await fetch(`${API_URL}/api/rooms`);
+        if (!response.ok) throw new Error('Failed to fetch rooms');
+        
         const rooms = await response.json();
         displayRooms(rooms);
     } catch (error) {
         console.error('Error loading rooms:', error);
+        alert('Failed to load rooms');
     }
 }
 
@@ -165,7 +194,7 @@ function displayRooms(rooms) {
     roomsList.innerHTML = '';
 
     if (rooms.length === 0) {
-        roomsList.innerHTML = '<p style="color: #999; font-size: 12px;">No rooms available</p>';
+        roomsList.innerHTML = '<p style="color: #999; font-size: 12px; padding: 10px;">No rooms available</p>';
         return;
     }
 
@@ -176,8 +205,8 @@ function displayRooms(rooms) {
             roomItem.classList.add('active');
         }
         roomItem.innerHTML = `
-            <div class="room-name">${room.name}</div>
-            <div class="room-desc">${room.description || 'No description'}</div>
+            <div class="room-name">${escapeHtml(room.name)}</div>
+            <div class="room-desc">${escapeHtml(room.description || 'No description')}</div>
         `;
         roomItem.addEventListener('click', () => joinRoom(room, roomItem));
         roomsList.appendChild(roomItem);
@@ -191,6 +220,11 @@ async function createRoom() {
 
     if (!name) {
         alert('Room name is required');
+        return;
+    }
+
+    if (name.length > 100) {
+        alert('Room name must be less than 100 characters');
         return;
     }
 
@@ -232,7 +266,7 @@ function joinRoom(room, roomItem) {
     const roomSub = centrifuge.newSubscription(`room_${room.id}`);
     
     roomSub.on('subscribe', () => {
-        console.log(`Subscribed to room ${room.id}`);
+        console.log(`✅ Subscribed to room ${room.id}`);
         
         // Notify joined
         centrifuge.call('join_room', {
@@ -250,9 +284,11 @@ function joinRoom(room, roomItem) {
                 displayMessages(result.messages);
             }).catch(error => {
                 console.error('Error fetching messages:', error);
+                alert('Failed to load messages');
             });
         }).catch(error => {
             console.error('Error joining room:', error);
+            alert('Failed to join room');
         });
     });
 
@@ -276,6 +312,10 @@ function joinRoom(room, roomItem) {
                 handleUserTyping(data);
                 break;
         }
+    });
+
+    roomSub.on('error', (err) => {
+        console.error('Room subscription error:', err);
     });
 
     roomSub.subscribe();
@@ -304,9 +344,13 @@ function leaveCurrentRoom(cleanup = true) {
 
         if (cleanup) {
             // Unsubscribe from room
-            const roomSub = centrifuge.getSubscription(`room_${currentRoom.id}`);
-            if (roomSub) {
-                roomSub.unsubscribe();
+            try {
+                const roomSub = centrifuge.getSubscription(`room_${currentRoom.id}`);
+                if (roomSub) {
+                    roomSub.unsubscribe();
+                }
+            } catch (error) {
+                console.error('Error unsubscribing from room:', error);
             }
         }
 
@@ -327,6 +371,11 @@ function sendMessage() {
         return;
     }
 
+    if (message.length > 4096) {
+        alert('Message is too long (max 4096 characters)');
+        return;
+    }
+
     centrifuge.call('send_message', {
         user_id: currentUser.id,
         room_id: currentRoom.id,
@@ -334,6 +383,7 @@ function sendMessage() {
         username: currentUser.username
     }).then(() => {
         input.value = '';
+        input.style.height = 'auto';
         centrifuge.call('stop_typing', {
             room_id: currentRoom.id,
             username: currentUser.username
@@ -389,7 +439,7 @@ function displayMessage(data, isOwn) {
         <div class="message-avatar">${avatar}</div>
         <div class="message-content">
             <div class="message-bubble">
-                <div class="message-header">${data.username}</div>
+                <div class="message-header">${escapeHtml(data.username)}</div>
                 <div class="message-text">${escapeHtml(data.message)}</div>
                 <div class="message-footer">
                     <span>${timestamp}</span>
@@ -424,7 +474,7 @@ function handleUserJoined(data) {
     message.className = 'message system-message';
     message.innerHTML = `
         <div class="message-bubble">
-            <div class="message-text">${data.username} joined the chat</div>
+            <div class="message-text">${escapeHtml(data.username)} joined the chat</div>
         </div>
     `;
     container.appendChild(message);
@@ -436,7 +486,7 @@ function handleUserLeft(data) {
     message.className = 'message system-message';
     message.innerHTML = `
         <div class="message-bubble">
-            <div class="message-text">${data.username} left the chat</div>
+            <div class="message-text">${escapeHtml(data.username)} left the chat</div>
         </div>
     `;
     container.appendChild(message);
@@ -469,7 +519,7 @@ function updateOnlineUsers(users) {
     document.getElementById('onlineCount').textContent = count;
 
     if (count === 0) {
-        list.innerHTML = '<p style="color: #999; font-size: 12px;">No one online</p>';
+        list.innerHTML = '<p style="color: #999; font-size: 12px; padding: 10px;">No one online</p>';
         return;
     }
 
@@ -479,7 +529,7 @@ function updateOnlineUsers(users) {
         item.innerHTML = `
             <div class="user-avatar">${user.username[0].toUpperCase()}</div>
             <div class="user-details">
-                <div class="user-name">${user.username}</div>
+                <div class="user-name">${escapeHtml(user.username)}</div>
                 <div class="user-status">
                     <span class="status-dot"></span>
                     <span>Online</span>
@@ -540,7 +590,7 @@ function updateTypingIndicator() {
         const text = users.length === 1 ? 'is typing' : 'are typing';
         indicator.innerHTML = `
             <div class="typing-text">
-                ${usersList} ${text}
+                ${escapeHtml(usersList)} ${text}
                 <span class="typing-dots">
                     <span class="typing-dot"></span>
                     <span class="typing-dot"></span>
@@ -560,12 +610,29 @@ function closeModal(modalId) {
     document.getElementById(modalId).classList.remove('active');
 }
 
-// Utility
+// Utility Functions
 function escapeHtml(text) {
+    if (!text) return '';
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
 }
+
+function isValidEmail(email) {
+    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return re.test(email);
+}
+
+// Auto-expand textarea on input
+document.addEventListener('DOMContentLoaded', () => {
+    const textarea = document.getElementById('messageInput');
+    if (textarea) {
+        textarea.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = (this.scrollHeight) + 'px';
+        });
+    }
+});
 
 // Handle logout
 window.addEventListener('beforeunload', () => {
@@ -574,5 +641,15 @@ window.addEventListener('beforeunload', () => {
             user_id: currentUser.id,
             username: currentUser.username
         }).catch(error => console.error('Error marking user offline:', error));
+        centrifuge.disconnect();
+    }
+});
+
+// Handle page visibility
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden && centrifuge) {
+        console.log('Page hidden - user may be inactive');
+    } else if (!document.hidden && centrifuge) {
+        console.log('Page visible - resuming connection');
     }
 });
