@@ -1,8 +1,11 @@
-// Socket.io connection
-let socket;
+// Centrifugo connection
+let centrifuge;
 let currentUser = null;
 let currentRoom = null;
-const API_URL = window.location.origin; // Use current domain
+const API_URL = window.location.origin;
+const CENTRIFUGO_URL = window.location.protocol === 'https:' 
+  ? 'wss://' + window.location.host + '/connection/websocket'
+  : 'ws://localhost:8000/connection/websocket';
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -63,21 +66,43 @@ async function joinChat() {
         const user = await response.json();
         currentUser = user;
 
-        // Initialize Socket.io
-        socket = io(API_URL, {
-            reconnection: true,
-            reconnectionDelay: 1000,
-            reconnectionDelayMax: 5000,
-            reconnectionAttempts: 5,
-            transports: ['websocket', 'polling']
+        // Get auth token for Centrifugo
+        const tokenResponse = await fetch(`${API_URL}/api/centrifugo/auth`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: user.id })
         });
 
-        setupSocketListeners();
+        if (!tokenResponse.ok) {
+            throw new Error('Failed to get Centrifugo token');
+        }
 
-        // Emit user online event
-        socket.emit('user_online', {
-            user_id: currentUser.id,
-            username: currentUser.username
+        const { token } = await tokenResponse.json();
+
+        // Initialize Centrifugo
+        centrifuge = new Centrifuge(CENTRIFUGO_URL, {
+            token: token,
+            debug: true
+        });
+
+        setupCentrifugoListeners();
+
+        // Connect
+        centrifuge.connect();
+
+        centrifuge.on('connect', () => {
+            console.log('Connected to Centrifugo');
+            
+            // Notify user online
+            centrifuge.call('user_online', {
+                user_id: currentUser.id,
+                username: currentUser.username
+            }).then(result => {
+                console.log('User online response:', result);
+                updateOnlineUsers(result.online_users);
+            }).catch(error => {
+                console.error('Error marking user online:', error);
+            });
         });
 
         // Switch UI
@@ -88,44 +113,39 @@ async function joinChat() {
             <strong>${currentUser.username}</strong>
         `;
 
-        // Load rooms and online users
+        // Load rooms
         await loadRooms();
-        socket.emit('get_online_users');
+
     } catch (error) {
         console.error('Error joining chat:', error);
         alert('Error: ' + error.message);
     }
 }
 
-function setupSocketListeners() {
-    // Online users
-    socket.on('online_users_list', updateOnlineUsers);
-    socket.on('user_status_changed', handleUserStatusChange);
-
-    // Messages
-    socket.on('receive_message', handleReceivedMessage);
-    socket.on('messages_list', displayMessages);
-    socket.on('user_joined', handleUserJoined);
-    socket.on('user_left', handleUserLeft);
-
-    // Typing
-    socket.on('user_typing', handleUserTyping);
-
-    // Read receipts
-    socket.on('message_read', handleMessageRead);
-
-    // Errors
-    socket.on('error', (error) => {
-        console.error('Socket error:', error);
-        alert('Error: ' + error.message);
+function setupCentrifugoListeners() {
+    // Subscribe to user status channel
+    const userStatusSub = centrifuge.newSubscription('user_status');
+    
+    userStatusSub.on('subscribe', () => {
+        console.log('Subscribed to user_status channel');
     });
 
-    socket.on('disconnect', () => {
-        console.log('Disconnected from server');
+    userStatusSub.on('publication', (message) => {
+        const { type, data } = message.data;
+        if (type === 'user_status_changed') {
+            handleUserStatusChange(data);
+        }
     });
 
-    socket.on('connect_error', (error) => {
-        console.error('Connection error:', error);
+    userStatusSub.subscribe();
+
+    // Handle disconnection
+    centrifuge.on('disconnect', () => {
+        console.log('Disconnected from Centrifugo');
+    });
+
+    centrifuge.on('error', (error) => {
+        console.error('Centrifugo error:', error);
     });
 }
 
@@ -203,26 +223,62 @@ async function createRoom() {
 // Join Room
 function joinRoom(room, roomItem) {
     if (currentRoom) {
-        socket.emit('leave_room', {
-            room_id: currentRoom.id,
-            username: currentUser.username
-        });
+        leaveCurrentRoom(false);
     }
 
     currentRoom = room;
 
-    socket.emit('join_room', {
-        user_id: currentUser.id,
-        room_id: room.id,
-        username: currentUser.username
+    // Subscribe to room channel
+    const roomSub = centrifuge.newSubscription(`room_${room.id}`);
+    
+    roomSub.on('subscribe', () => {
+        console.log(`Subscribed to room ${room.id}`);
+        
+        // Notify joined
+        centrifuge.call('join_room', {
+            user_id: currentUser.id,
+            room_id: room.id,
+            username: currentUser.username
+        }).then(() => {
+            // Get messages
+            centrifuge.call('get_messages', {
+                room_id: room.id,
+                user_id: currentUser.id,
+                limit: 50,
+                offset: 0
+            }).then(result => {
+                displayMessages(result.messages);
+            }).catch(error => {
+                console.error('Error fetching messages:', error);
+            });
+        }).catch(error => {
+            console.error('Error joining room:', error);
+        });
     });
 
-    socket.emit('get_messages', {
-        room_id: room.id,
-        user_id: currentUser.id,
-        limit: 50,
-        offset: 0
+    roomSub.on('publication', (message) => {
+        const { type, data } = message.data;
+        
+        switch (type) {
+            case 'receive_message':
+                handleReceivedMessage(data);
+                break;
+            case 'user_joined':
+                handleUserJoined(data);
+                break;
+            case 'user_left':
+                handleUserLeft(data);
+                break;
+            case 'message_read':
+                handleMessageRead(data);
+                break;
+            case 'user_typing':
+                handleUserTyping(data);
+                break;
+        }
     });
+
+    roomSub.subscribe();
 
     // Update UI
     document.getElementById('currentRoomName').textContent = room.name;
@@ -237,12 +293,23 @@ function joinRoom(room, roomItem) {
     roomItem.classList.add('active');
 }
 
-function leaveCurrentRoom() {
+function leaveCurrentRoom(cleanup = true) {
     if (currentRoom) {
-        socket.emit('leave_room', {
+        centrifuge.call('leave_room', {
             room_id: currentRoom.id,
             username: currentUser.username
+        }).catch(error => {
+            console.error('Error leaving room:', error);
         });
+
+        if (cleanup) {
+            // Unsubscribe from room
+            const roomSub = centrifuge.getSubscription(`room_${currentRoom.id}`);
+            if (roomSub) {
+                roomSub.unsubscribe();
+            }
+        }
+
         currentRoom = null;
         document.getElementById('currentRoomName').textContent = 'Select a room';
         document.getElementById('currentRoomDesc').textContent = '';
@@ -260,17 +327,20 @@ function sendMessage() {
         return;
     }
 
-    socket.emit('send_message', {
+    centrifuge.call('send_message', {
         user_id: currentUser.id,
         room_id: currentRoom.id,
         message,
         username: currentUser.username
-    });
-
-    input.value = '';
-    socket.emit('stop_typing', {
-        room_id: currentRoom.id,
-        username: currentUser.username
+    }).then(() => {
+        input.value = '';
+        centrifuge.call('stop_typing', {
+            room_id: currentRoom.id,
+            username: currentUser.username
+        }).catch(error => console.error('Error stopping typing:', error));
+    }).catch(error => {
+        console.error('Error sending message:', error);
+        alert('Failed to send message');
     });
 }
 
@@ -335,15 +405,15 @@ function displayMessage(data, isOwn) {
 
     container.appendChild(message);
 
-    // Mark as read if own message or after delay
+    // Mark as read if not own message
     if (!isOwn) {
         setTimeout(() => {
-            socket.emit('mark_as_read', {
+            centrifuge.call('mark_as_read', {
                 message_id: data.id,
                 user_id: currentUser.id,
                 room_id: currentRoom.id,
                 username: currentUser.username
-            });
+            }).catch(error => console.error('Error marking as read:', error));
         }, 1000);
     }
 }
@@ -421,7 +491,10 @@ function updateOnlineUsers(users) {
 }
 
 function handleUserStatusChange(data) {
-    socket.emit('get_online_users');
+    // Refresh online users list
+    centrifuge.call('get_online_users', {}).then(result => {
+        updateOnlineUsers(result.online_users);
+    }).catch(error => console.error('Error fetching online users:', error));
 }
 
 // Typing
@@ -431,16 +504,16 @@ function handleTyping() {
 
     if (typingTimeout) clearTimeout(typingTimeout);
 
-    socket.emit('typing', {
+    centrifuge.call('typing', {
         room_id: currentRoom.id,
         username: currentUser.username
-    });
+    }).catch(error => console.error('Error sending typing:', error));
 
     typingTimeout = setTimeout(() => {
-        socket.emit('stop_typing', {
+        centrifuge.call('stop_typing', {
             room_id: currentRoom.id,
             username: currentUser.username
-        });
+        }).catch(error => console.error('Error stopping typing:', error));
     }, 3000);
 }
 
@@ -496,10 +569,10 @@ function escapeHtml(text) {
 
 // Handle logout
 window.addEventListener('beforeunload', () => {
-    if (socket && currentUser) {
-        socket.emit('user_offline', {
+    if (centrifuge && currentUser) {
+        centrifuge.call('user_offline', {
             user_id: currentUser.id,
             username: currentUser.username
-        });
+        }).catch(error => console.error('Error marking user offline:', error));
     }
 });
