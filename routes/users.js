@@ -4,9 +4,7 @@ const db = require('../database/db');
 const redis = require('redis');
 
 const redisClient = redis.createClient({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: process.env.REDIS_PORT || 6379,
-  password: process.env.REDIS_PASSWORD || undefined
+  url: process.env.REDIS_URL || 'redis://localhost:6379'
 });
 
 redisClient.connect().catch(console.error);
@@ -59,14 +57,23 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
   const { username, email } = req.body;
 
+  // Validation
   if (!username || !email) {
     return res.status(400).json({ error: 'Username and email are required' });
+  }
+
+  if (username.length < 2 || username.length > 50) {
+    return res.status(400).json({ error: 'Username must be between 2 and 50 characters' });
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: 'Invalid email format' });
   }
 
   try {
     const result = await db.run(
       'INSERT INTO users (username, email, password) VALUES (?, ?, ?)',
-      [username, email, 'no_auth']
+      [username.trim(), email.toLowerCase().trim(), 'no_auth']
     );
 
     res.status(201).json({
@@ -95,12 +102,18 @@ router.put('/:id', async (req, res) => {
     const params = [];
 
     if (username) {
+      if (username.length < 2 || username.length > 50) {
+        return res.status(400).json({ error: 'Username must be between 2 and 50 characters' });
+      }
       query += ', username = ?';
-      params.push(username);
+      params.push(username.trim());
     }
     if (email) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ error: 'Invalid email format' });
+      }
       query += ', email = ?';
-      params.push(email);
+      params.push(email.toLowerCase().trim());
     }
 
     query += ' WHERE id = ?';
@@ -114,6 +127,9 @@ router.put('/:id', async (req, res) => {
 
     res.json({ message: 'User updated successfully' });
   } catch (error) {
+    if (error.message.includes('UNIQUE constraint failed')) {
+      return res.status(400).json({ error: 'Username or email already exists' });
+    }
     console.error(error);
     res.status(500).json({ error: 'Failed to update user' });
   }
