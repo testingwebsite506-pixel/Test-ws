@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # Redis - for message caching and online users
+  redis:
+    image: redis:7-alpine
+    container_name: test_ws_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Centrifugo - Real-time WebSocket server
+  centrifugo:
+    image: centrifugal/centrifugo:v5
+    container_name: test_ws_centrifugo
+    ports:
+      - "8000:8000"
+    environment:
+      CENTRIFUGO_TOKEN_HMAC_SECRET_KEY: "your-secret-key-change-this-in-production"
+      CENTRIFUGO_API_KEY: "your-api-key-change-this-in-production"
+      CENTRIFUGO_ADMIN: "true"
+      CENTRIFUGO_ADMIN_PASSWORD: "admin"
+      CENTRIFUGO_LOG_LEVEL: "info"
+      CENTRIFUGO_REDIS_URL: "redis://redis:6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: centrifugo
+
+  # Node.js Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: test_ws_app
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: "development"
+      PORT: "3000"
+      CENTRIFUGO_URL: "ws://centrifugo:8000/connection/websocket"
+      CENTRIFUGO_SECRET: "your-secret-key-change-this-in-production"
+      REDIS_URL: "redis://redis:6379"
+      DATABASE_PATH: "./database.db"
+    depends_on:
+      redis:
+        condition: service_healthy
+      centrifugo:
+        condition: service_started
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - ./database.db:/app/database.db
+    command: npm run dev
+
+volumes:
+  redis_data:
+
+networks:
+  default:
+    name: test_ws_network
