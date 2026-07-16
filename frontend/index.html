@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat App</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="chat-container">
+        <!-- Login Section -->
+        <div id="loginSection" class="section active">
+            <div class="login-box">
+                <h1>Welcome to Chat App</h1>
+                <div class="form-group">
+                    <input type="text" id="usernameInput" placeholder="Enter your username" />
+                </div>
+                <div class="form-group">
+                    <input type="email" id="emailInput" placeholder="Enter your email" />
+                </div>
+                <button id="joinBtn" class="btn btn-primary">Join Chat</button>
+                <p class="info-text">No authentication required - just enter your details to start chatting!</p>
+            </div>
+        </div>
+
+        <!-- Main Chat Section -->
+        <div id="chatSection" class="section">
+            <div class="chat-wrapper">
+                <!-- Sidebar -->
+                <div class="sidebar">
+                    <div class="sidebar-header">
+                        <h2>Chat App</h2>
+                        <div class="user-info" id="userInfo"></div>
+                    </div>
+
+                    <!-- Online Users -->
+                    <div class="online-users-section">
+                        <h3>Online Users <span id="onlineCount" class="badge">0</span></h3>
+                        <div id="onlineUsersList" class="users-list"></div>
+                    </div>
+
+                    <!-- Rooms -->
+                    <div class="rooms-section">
+                        <div class="rooms-header">
+                            <h3>Rooms</h3>
+                            <button id="createRoomBtn" class="btn-icon" title="Create Room">+</button>
+                        </div>
+                        <div id="roomsList" class="rooms-list"></div>
+                    </div>
+                </div>
+
+                <!-- Chat Area -->
+                <div class="chat-area">
+                    <div class="chat-header">
+                        <div>
+                            <h2 id="currentRoomName">Select a room</h2>
+                            <p id="currentRoomDesc" class="room-description"></p>
+                        </div>
+                        <button id="leaveBtn" class="btn btn-secondary" style="display: none;">Leave Room</button>
+                    </div>
+
+                    <div id="messagesContainer" class="messages-container">
+                        <div class="welcome-message">
+                            <p>Select a room to start chatting</p>
+                        </div>
+                    </div>
+
+                    <div class="typing-indicator" id="typingIndicator"></div>
+
+                    <div class="message-input-area">
+                        <textarea id="messageInput" placeholder="Type your message..." rows="3"></textarea>
+                        <button id="sendBtn" class="btn btn-primary">Send</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Room Modal -->
+    <div id="createRoomModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Create New Room</h2>
+                <button class="close-btn" onclick="closeModal('createRoomModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Room Name</label>
+                    <input type="text" id="roomNameInput" placeholder="Enter room name" />
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea id="roomDescInput" placeholder="Enter room description (optional)" rows="3"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('createRoomModal')">Cancel</button>
+                <button id="createRoomConfirmBtn" class="btn btn-primary">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

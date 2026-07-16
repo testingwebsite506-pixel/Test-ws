@@ -16,6 +16,8 @@ const init = () => {
         username TEXT UNIQUE NOT NULL,
         email TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL,
+        is_online BOOLEAN DEFAULT 0,
+        last_seen DATETIME,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
@@ -55,6 +57,19 @@ const init = () => {
         joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(room_id, user_id),
         FOREIGN KEY (room_id) REFERENCES rooms(id),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      )
+    `);
+
+    // Read receipts table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS read_receipts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        read_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(message_id, user_id),
+        FOREIGN KEY (message_id) REFERENCES messages(id),
         FOREIGN KEY (user_id) REFERENCES users(id)
       )
     `);

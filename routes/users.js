@@ -1,15 +1,36 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../database/db');
+const redis = require('redis');
+
+const redisClient = redis.createClient({
+  host: process.env.REDIS_HOST || 'localhost',
+  port: process.env.REDIS_PORT || 6379,
+  password: process.env.REDIS_PASSWORD || undefined
+});
+
+redisClient.connect().catch(console.error);
 
 // Get all users
 router.get('/', async (req, res) => {
   try {
-    const users = await db.all('SELECT id, username, email, created_at FROM users');
+    const users = await db.all('SELECT id, username, email, is_online, last_seen, created_at FROM users');
     res.json(users);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+// Get all online users
+router.get('/online', async (req, res) => {
+  try {
+    const onlineUsers = await redisClient.hGetAll('online_users');
+    const onlineUsersList = Object.values(onlineUsers).map(u => JSON.parse(u));
+    res.json(onlineUsersList);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to fetch online users' });
   }
 });
 
@@ -19,7 +40,7 @@ router.get('/:id', async (req, res) => {
 
   try {
     const user = await db.get(
-      'SELECT id, username, email, created_at FROM users WHERE id = ?',
+      'SELECT id, username, email, is_online, last_seen, created_at FROM users WHERE id = ?',
       [id]
     );
 
@@ -34,24 +55,25 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Create user
+// Create user (no auth)
 router.post('/', async (req, res) => {
-  const { username, email, password } = req.body;
+  const { username, email } = req.body;
 
-  if (!username || !email || !password) {
-    return res.status(400).json({ error: 'Missing required fields' });
+  if (!username || !email) {
+    return res.status(400).json({ error: 'Username and email are required' });
   }
 
   try {
     const result = await db.run(
       'INSERT INTO users (username, email, password) VALUES (?, ?, ?)',
-      [username, email, password]
+      [username, email, 'no_auth']
     );
 
     res.status(201).json({
       id: result.id,
       username,
       email,
+      is_online: false,
       created_at: new Date()
     });
   } catch (error) {
