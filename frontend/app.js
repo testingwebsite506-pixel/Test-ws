@@ -2,8 +2,7 @@
 let socket;
 let currentUser = null;
 let currentRoom = null;
-let messageId = 0;
-const API_URL = 'http://localhost:3000';
+const API_URL = window.location.origin; // Use current domain
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -69,7 +68,8 @@ async function joinChat() {
             reconnection: true,
             reconnectionDelay: 1000,
             reconnectionDelayMax: 5000,
-            reconnectionAttempts: 5
+            reconnectionAttempts: 5,
+            transports: ['websocket', 'polling']
         });
 
         setupSocketListeners();
@@ -123,6 +123,10 @@ function setupSocketListeners() {
     socket.on('disconnect', () => {
         console.log('Disconnected from server');
     });
+
+    socket.on('connect_error', (error) => {
+        console.error('Connection error:', error);
+    });
 }
 
 // Load Rooms
@@ -155,7 +159,7 @@ function displayRooms(rooms) {
             <div class="room-name">${room.name}</div>
             <div class="room-desc">${room.description || 'No description'}</div>
         `;
-        roomItem.addEventListener('click', () => joinRoom(room));
+        roomItem.addEventListener('click', () => joinRoom(room, roomItem));
         roomsList.appendChild(roomItem);
     });
 }
@@ -197,7 +201,7 @@ async function createRoom() {
 }
 
 // Join Room
-function joinRoom(room) {
+function joinRoom(room, roomItem) {
     if (currentRoom) {
         socket.emit('leave_room', {
             room_id: currentRoom.id,
@@ -230,7 +234,7 @@ function joinRoom(room) {
     document.querySelectorAll('.room-item').forEach(item => {
         item.classList.remove('active');
     });
-    event.target.closest('.room-item').classList.add('active');
+    roomItem.classList.add('active');
 }
 
 function leaveCurrentRoom() {
@@ -417,11 +421,7 @@ function updateOnlineUsers(users) {
 }
 
 function handleUserStatusChange(data) {
-    if (data.status === 'online') {
-        socket.emit('get_online_users');
-    } else {
-        socket.emit('get_online_users');
-    }
+    socket.emit('get_online_users');
 }
 
 // Typing

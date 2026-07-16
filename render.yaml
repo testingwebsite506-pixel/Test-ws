@@ -1,0 +1,2 @@
+web: node server.js
+worker: echo "Using Render's managed Redis and SQLite"
