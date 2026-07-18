@@ -24,8 +24,7 @@ const CENTRIFUGO_SECRET = process.env.CENTRIFUGO_SECRET || 'your-secret-key';
 
 console.log('🔌 Centrifugo URL:', CENTRIFUGO_URL);
 
-const centrifuge = new Centrifuge({
-  url: CENTRIFUGO_URL,
+const centrifuge = new Centrifuge(CENTRIFUGO_URL, {
   token: generateCentrifugoToken('server'),
 });
 
