@@ -1,5 +1,6 @@
 const express = require('express');
 const http = require('http');
+const WebSocket = require('ws');
 const { Centrifuge } = require('centrifuge');
 const cors = require('cors');
 const redis = require('redis');
@@ -26,6 +27,7 @@ console.log('🔌 Centrifugo URL:', CENTRIFUGO_URL);
 
 const centrifuge = new Centrifuge(CENTRIFUGO_URL, {
   token: generateCentrifugoToken('server'),
+  WebSocket: WebSocket,
 });
 
 // Redis configuration
